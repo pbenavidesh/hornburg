@@ -29,9 +29,12 @@ class svr_original_mape_l1:
         # parameters
         K = pairwise_kernels(X, metric=self.kernel, filter_params=True, **self.kwds)
         self.K = K
-        R = np.zeros((m, m))
+        # R = np.zeros((m, m))
+        R = np.eye((m)) + 1e-4
         self.G = self.K + R
         onev = np.ones((m, 1))
+        
+        return onev, m
         
     def solve(self, X, y):
             
@@ -42,19 +45,19 @@ class svr_original_mape_l1:
 
         # Problem
         objective = cp.Minimize(
-            cp.quad_form(self.beta, cp.psd_wrap(self.G)) 
-            + (2 * self.epsilon * y.T @ cp.abs(self.beta)) / 100
-            - 2 * y.T @ self.beta
+            0.5 * cp.quad_form(self.beta, cp.psd_wrap(self.G)) 
+            + (self.epsilon * y.T / 100) @ cp.abs(self.beta)
+            - y.T @ self.beta
         )
         
         self.constraints = [
-            self.beta <= (100 * self.C) / y,
-            self.beta >= - (100 * self.C) / y,
+            self.beta <= self.C * (100 / y),
+            self.beta >= - self.C * (100 / y),
             self.beta.T @ onev == 0,
         ]
         
         problem = cp.Problem(objective, self.constraints)
-            
+        
         # solve problem
         problem.solve(verbose=self.verbose)
         self.status = problem.status
@@ -83,6 +86,8 @@ class svr_original_mape_l1:
         if self.status != "optimal":
             self.non_optimal(y)
             return self
+        
+        self.beta = self.beta.value
         
         beta_1 = self.beta.flatten()
         # Use different conditions to compute beta_1 due to internal numerical unstability
@@ -143,3 +148,61 @@ class svr_original_mape_l1:
         self.C = params["C"]
         self.epsilon = params["epsilon"]
         return self
+
+# %%
+if __name__ == "__main__":
+    from sklearn.datasets import make_regression
+    from sklearn.svm import SVR
+    import matplotlib.pyplot as plt
+    
+    # Create a regression dataset
+    X, y = make_regression(
+        n_samples=100,
+        n_features=1, 
+        noise=20,
+        random_state=1
+    )
+    
+    y = y + 200  
+    
+    C=1e1
+    epsilon=1e-1
+    gamma=0.1
+    
+    model = svr_original_mape_l1(
+            C = C,
+            epsilon = epsilon,
+            kernel = "rbf",
+            gamma=gamma,
+            verbose=True
+        )
+    
+    model_svr = SVR(
+            C = C,
+            epsilon = epsilon,
+            kernel = "rbf",
+            gamma=gamma
+    )
+    
+    model.fit(X, y)
+    model_svr.fit(X, y)
+    
+    y_pred = model.predict(X)
+    y_pred_svr = model_svr.predict(X)
+    
+    plt.title("Support vectors")
+    plt.scatter(X, y)
+    plt.scatter(model.support_vectors, model.support_labels, color="red")
+    plt.scatter(X[model_svr.support_], y[model_svr.support_], color="green", marker=".")
+    plt.show()
+    
+    print("b from model_svr:", model_svr.intercept_[0])
+    print("b from moodel:", model.b)
+    
+
+    plt.scatter(X, y)
+    plt.scatter(X, y_pred, marker=".")
+    plt.scatter(X, y_pred_svr, marker=".")
+    plt.title("Predictions")
+    plt.show()
+# %%
