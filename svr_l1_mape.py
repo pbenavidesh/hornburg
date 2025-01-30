@@ -4,6 +4,7 @@ import numpy as np
 import cvxpy as cp
 from sklearn.utils.validation import check_X_y
 from sklearn.metrics.pairwise import pairwise_kernels
+from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
 
 
 class svr_original_mape_l1:
@@ -30,7 +31,7 @@ class svr_original_mape_l1:
         K = pairwise_kernels(X, metric=self.kernel, filter_params=True, **self.kwds)
         self.K = K
         # R = np.zeros((m, m))
-        R = np.eye((m)) + 1e-4
+        R = np.eye(m) * 1e-4
         self.G = self.K + R
         onev = np.ones((m, 1))
         
@@ -45,9 +46,9 @@ class svr_original_mape_l1:
 
         # Problem
         objective = cp.Minimize(
-            0.5 * cp.quad_form(self.beta, cp.psd_wrap(self.G)) 
-            + (self.epsilon * y.T / 100) @ cp.abs(self.beta)
-            - y.T @ self.beta
+            cp.quad_form(self.beta, cp.psd_wrap(self.G)) 
+            + 2 * (self.epsilon * y.T / 100) @ cp.abs(self.beta)
+            - 2 * y.T @ self.beta
         )
         
         self.constraints = [
@@ -107,21 +108,21 @@ class svr_original_mape_l1:
             
             # Identify bounded and unbounded support vectors
             if self.C < 1e3:
-                num_eps = 1e-5
-                bounded_sv = (np.abs(self.support_beta - self.C) < num_eps) | (np.abs(self.support_beta + self.C) < num_eps)
+                num_eps = 1e-4
+                bounded_sv = (np.abs(self.support_beta - (100 * self.C / self.support_labels)) < num_eps) | (np.abs(self.support_beta + (100 * self.C / self.support_labels)) < num_eps)
             else:
                 num_eps = (self.C / 1e5)
-                bounded_sv = (np.abs(self.support_beta - self.C) < num_eps) | (np.abs(self.support_beta + self.C) < num_eps)
+                bounded_sv = (np.abs(self.support_beta - (100 * self.C / self.support_labels)) < num_eps) | (np.abs(self.support_beta + (100 * self.C / self.support_labels)) < num_eps)
             unbounded_sv = ~bounded_sv
             unbounded_sv = unbounded_sv.flatten()
             self.unbounded_sv = unbounded_sv
             if np.any(unbounded_sv):
                 self.b = np.mean(
-                    epsilon_beta[unbounded_sv] - self.support_beta.T @ support_kernel[:, unbounded_sv] + self.support_labels[unbounded_sv]
+                    (epsilon_beta[unbounded_sv] * self.support_labels[unbounded_sv]) - self.support_beta.T @ support_kernel[:, unbounded_sv] + self.support_labels[unbounded_sv]
                 )
             else:
                 self.b = np.mean(
-                    epsilon_beta - self.support_beta.T @ support_kernel + self.support_labels
+                    (epsilon_beta * self.support_labels) - self.support_beta.T @ support_kernel + self.support_labels
                 )
 
         else:
@@ -165,11 +166,11 @@ if __name__ == "__main__":
     
     y = y + 200  
     
-    C=1e1
+    C=1000
     epsilon=1e-1
-    gamma=0.1
+    gamma=1e1
     
-    model = svr_original_mape_l1(
+    model_mape = svr_original_mape_l1(
             C = C,
             epsilon = epsilon,
             kernel = "rbf",
@@ -177,32 +178,57 @@ if __name__ == "__main__":
             verbose=True
         )
     
-    model_svr = SVR(
+    model_sklrn = SVR(
             C = C,
             epsilon = epsilon,
             kernel = "rbf",
             gamma=gamma
     )
     
-    model.fit(X, y)
-    model_svr.fit(X, y)
+    model_mape.fit(X, y)
+    model_sklrn.fit(X, y)
     
-    y_pred = model.predict(X)
-    y_pred_svr = model_svr.predict(X)
+    y_mape = model_mape.predict(X)
+    y_pred_sklearn = model_sklrn.predict(X)
+    
+# %%
+    
     
     plt.title("Support vectors")
     plt.scatter(X, y)
-    plt.scatter(model.support_vectors, model.support_labels, color="red")
-    plt.scatter(X[model_svr.support_], y[model_svr.support_], color="green", marker=".")
+    plt.scatter(model_mape.support_vectors, model_mape.support_labels, color="red")
+    plt.scatter(X[model_sklrn.support_], y[model_sklrn.support_], color="green", marker=".")
     plt.show()
     
-    print("b from model_svr:", model_svr.intercept_[0])
-    print("b from moodel:", model.b)
+    print("b from model_sklrn:", model_sklrn.intercept_[0])
+    print("b from moodel:", model_mape.b)
     
 
     plt.scatter(X, y)
-    plt.scatter(X, y_pred, marker=".")
-    plt.scatter(X, y_pred_svr, marker=".")
+    plt.scatter(X, y_mape, marker="o", label="mape")
+    plt.scatter(X, y_pred_sklearn, marker=".", label="sklearn")
     plt.title("Predictions")
+    plt.legend()
     plt.show()
+    
+    support_indices_sklearn = model_sklrn.support_
+    dual_coef_full_sklearn = np.zeros_like(y)
+    dual_coef_full_sklearn[support_indices_sklearn] = model_sklrn.dual_coef_
+
+    d = np.linspace(-2, 2, y.shape[0])
+    # plt.scatter(d, dual_coef_full_sklearn, label="sklearn", marker="*")
+    plt.scatter(d, model_mape.beta.flatten() * y, label="mape_l1", marker=".", color="red")
+    # plt.ylim(-0.0001, 0.0001)
+    # plt.ylim(-10, 10)
+    plt.legend()
+    plt.show()
+    
+    
+# %%
+
+    def print_accuracy(y, y_pred, model):
+        print(f"{model} accuracy: {mean_absolute_percentage_error(y, y_pred.flatten())}")
+
+    print_accuracy(y, y_pred_sklearn, "sklearn")
+    print_accuracy(y, y_mape, "mape_l1")
 # %%
