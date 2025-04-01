@@ -4,10 +4,9 @@ import numpy as np
 import cvxpy as cp
 from sklearn.utils.validation import check_X_y
 from sklearn.metrics.pairwise import pairwise_kernels
-from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
 
 
-class svr_original_mape_l1:
+class svr_original_mape:
     
     def __init__(self, C=1, epsilon=1, kernel="linear", verbose=False, **kernel_params):
         self.C = C
@@ -28,7 +27,10 @@ class svr_original_mape_l1:
         m = X.shape[0]
         
         # parameters
-        K = pairwise_kernels(X, metric=self.kernel, filter_params=True, **self.kwds)
+        if isinstance(self.kernel, str):
+            K = pairwise_kernels(X, metric=self.kernel, filter_params=True, **self.kwds)
+        else:
+            K = self.kernel(X)
         self.K = K
         # R = np.zeros((m, m))
         R = np.eye(m) * 1e-4
@@ -60,7 +62,7 @@ class svr_original_mape_l1:
         problem = cp.Problem(objective, self.constraints)
         
         # solve problem
-        problem.solve(verbose=self.verbose)
+        problem.solve(verbose=self.verbose, solver=cp.MOSEK)
         self.status = problem.status
         if self.status != "optimal":
             return self
@@ -81,7 +83,7 @@ class svr_original_mape_l1:
         X, y = self.check_x_y(X, y)
         try:
             self.solve(X, y)
-        except:
+        except cp.SolverError:
             self.status = "infeasible"
         
         if self.status != "optimal":
@@ -104,7 +106,10 @@ class svr_original_mape_l1:
             
             # calculate epsilon
             epsilon_beta = np.where(self.support_beta >= 0, -self.epsilon/100, self.epsilon/100)
-            support_kernel = pairwise_kernels(self.support_vectors, metric=self.kernel, filter_params=True, **self.kwds)
+            if isinstance(self.kernel, str):
+                support_kernel = pairwise_kernels(self.support_vectors, metric=self.kernel, filter_params=True, **self.kwds)
+            else:
+                support_kernel = self.kernel(self.support_vectors)
             
             # Identify bounded and unbounded support vectors
             if self.C < 1e3:
@@ -136,7 +141,10 @@ class svr_original_mape_l1:
     def decision_function(self, X):
         if self.sup_num == 0:
             return np.ones(X.shape[0]) * self.b
-        K = pairwise_kernels(self.support_vectors, X, metric=self.kernel, filter_params=True, **self.kwds)
+        if isinstance(self.kernel, str):
+            K = pairwise_kernels(self.support_vectors, X, metric=self.kernel, filter_params=True, **self.kwds)
+        else:
+            K = self.kernel(self.support_vectors, X)
         return self.support_beta.T @ K + self.b
     
     def score(self, X, y):
@@ -152,9 +160,12 @@ class svr_original_mape_l1:
 
 # %%
 if __name__ == "__main__":
+    from sklearn.metrics import mean_absolute_percentage_error
     from sklearn.datasets import make_regression
     from sklearn.svm import SVR
     import matplotlib.pyplot as plt
+    from sklearn.gaussian_process.kernels import RBF
+    from sklearn.gaussian_process.kernels import ExpSineSquared
     
     # Create a regression dataset
     X, y = make_regression(
@@ -170,12 +181,19 @@ if __name__ == "__main__":
     epsilon=1e-1
     gamma=1e1
     
-    model_mape = svr_original_mape_l1(
+    
+    seasonal_kernel = (
+    2.0**2
+    # * RBF(length_scale=100.0)
+    * ExpSineSquared(length_scale=1.0, periodicity=1.0, periodicity_bounds="fixed")
+    )
+    
+    model_mape = svr_original_mape(
             C = C,
             epsilon = epsilon,
-            kernel = "rbf",
+            kernel = RBF(length_scale=.50),
             gamma=gamma,
-            verbose=True
+            verbose=False
         )
     
     model_sklrn = SVR(
@@ -216,7 +234,7 @@ if __name__ == "__main__":
     dual_coef_full_sklearn[support_indices_sklearn] = model_sklrn.dual_coef_
 
     d = np.linspace(-2, 2, y.shape[0])
-    # plt.scatter(d, dual_coef_full_sklearn, label="sklearn", marker="*")
+    plt.scatter(d, dual_coef_full_sklearn, label="sklearn", marker="*")
     plt.scatter(d, model_mape.beta.flatten() * y, label="mape_l1", marker=".", color="red")
     # plt.ylim(-0.0001, 0.0001)
     # plt.ylim(-10, 10)
@@ -231,4 +249,6 @@ if __name__ == "__main__":
 
     print_accuracy(y, y_pred_sklearn, "sklearn")
     print_accuracy(y, y_mape, "mape_l1")
+    
+    
 # %%
